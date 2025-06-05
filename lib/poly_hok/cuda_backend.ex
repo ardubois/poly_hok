@@ -259,7 +259,7 @@ end
 
 
   def gen_lambda_name() do
-    for _ <- 1..10, into: "", do: <<Enum.random('0123456789abcdefghijklmno')>>
+    for _ <- 1..10, into: "", do: <<Enum.random(~c"0123456789abcdefghijklmno")>>
   end
   def compile_lambda({:fn, _, [{:->, _ , [para,body]}] }, type, name,module) do
 #    IO.puts "Compile lambda!!!!!!!!!!!!!!!!!!!!!!!!!!!!11"
