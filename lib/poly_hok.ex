@@ -271,7 +271,7 @@ def new_gnx(%Nx.Tensor{data: data, type: type, shape: shape, names: name}) do
     {l,c} -> {l,c}
     {l1,l2,c} -> {l1*l2,c}
   end
-  ref :: dynamic = case type do
+  ref  = case type do
      {:f,32} -> create_gpu_array_nx_nif(array,l,c,Kernel.to_charlist("float"))
      {:f,64} -> create_gpu_array_nx_nif(array,l,c,Kernel.to_charlist("double"))
      {:s,32} -> create_gpu_array_nx_nif(array,l,c,Kernel.to_charlist("int"))
