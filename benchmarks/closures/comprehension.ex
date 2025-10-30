@@ -1,21 +1,18 @@
 require PolyHok
 use Comp
 
+[arg] = System.argv()
+size = String.to_integer(arg)
 
-dev_vet = PolyHok.new_gnx(Nx.tensor([1,2,3,4,5,6,7,8,9,10]))
+host_a = Enum.to_list(1..size) |> Nx.tensor(type: :f64)
+host_b = Enum.to_list(1..size) |> Nx.tensor(type: :f64)
 
-v = 3
+prev = System.monotonic_time()
 
-(Comp.gpu_for n <- dev_vet,  do: v * n)
-|> PolyHok.get_gnx
-|> IO.inspect
+a = PolyHok.new_gnx(host_a)
+b = PolyHok.new_gnx(host_b)
 
+_result = (Comp.gpu_for i <- 0..size, do:  2 * a[i] + b[i]) |> PolyHok.get_gnx
 
-a = PolyHok.new_gnx(Nx.tensor(Enum.to_list(1..1000),type: {:s, 32}))
-b = PolyHok.new_gnx(Nx.tensor(Enum.to_list(1..1000),type: {:s, 32}))
-
-size = 1000
-
-(Comp.gpu_for i <- 0..size, do:  2 * a[i] + b[i])
-|> PolyHok.get_gnx
-|> IO.inspect
+next = System.monotonic_time()
+IO.puts "PolyHok\t#{size}\t#{System.convert_time_unit(next-prev,:native,:millisecond)} "
