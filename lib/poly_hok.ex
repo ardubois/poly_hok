@@ -886,8 +886,6 @@ def spawn(k,t,b,l) do
       nil -> raise "Unknown kernel #{inspect kernel_name}"
     end
   {kast, l} = JIT.closure_elimination(kast, l)
-  IO.inspect kast
-  IO.inspect l
   subs = JIT.get_function_parameters(kast, l)
   delta = JIT.gen_types_delta(kast, l)
   map_key = {kernel_name, subs, delta}
