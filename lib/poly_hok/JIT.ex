@@ -266,7 +266,7 @@ def process_module(module_name,body) do
 
   # initiate server that collects types and asts
   if (Process.whereis(:module_server) == nil) do
-    pid = spawn_link(fn -> module_server(%{},%{}) end)
+    pid = spawn_link(fn -> module_server(%{}, %{}, %{}) end)
     try do
          Process.register(pid, :module_server)
     rescue
@@ -286,29 +286,35 @@ end
 ######            ASTs are used to recompile a kernel at runtime substituting the names of the formal parameters of a function for
 ######         the actual parameters
 ############################
-def module_server(types_map,ast_map) do
-   receive do
-    {:add_ast,fun, ast,funs} ->
-      module_server(types_map,Map.put(ast_map,fun,{ast,funs}))
-    {:get_ast,f_name,pid} ->  send(pid, {:ast, ast_map[f_name]})
-                              module_server(types_map,ast_map)
-     {:add_type,fun, type} ->
-      module_server(Map.put(types_map,fun,type),ast_map)
-     {:get_map,pid} ->  send(pid, {:map,{types_map,ast_map}})
-                        module_server(types_map,ast_map)
-     {:get_include,pid} -> send(pid, {:include, ast_map[:include]})
-                            module_server(types_map,ast_map)
-     {:add_include, inc} -> case ast_map[:include] do
-                             nil -> module_server(types_map,Map.put(ast_map,:include,[inc]))
-                             l -> module_server(types_map,Map.put(ast_map,:include,[inc|l]))
-                            end
 
-     {:kill} ->
-           :ok
-     end
+def module_server(types_map, ast_map, ptx_map) do
+  receive do
+    {:add_ast, fun, ast, funs} ->
+      module_server(types_map, Map.put(ast_map,fun,{ast,funs}), ptx_map)
+    {:get_ast, f_name, pid} ->
+      send(pid, {:ast, ast_map[f_name]})
+      module_server(types_map, ast_map, ptx_map)
+    {:add_type, fun, type} ->
+      module_server(Map.put(types_map, fun, type), ast_map, ptx_map)
+    {:get_map, pid} ->
+    send(pid, {:map, {types_map,ast_map}})
+      module_server(types_map, ast_map, ptx_map)
+    {:get_include, pid} ->
+    send(pid, {:include, ast_map[:include]})
+      module_server(types_map, ast_map, ptx_map)
+    {:add_include, inc} ->
+      case ast_map[:include] do
+        nil -> module_server(types_map, Map.put(ast_map, :include, [inc]), ptx_map)
+        l -> module_server(types_map, Map.put(ast_map, :include, [inc | l]), ptx_map)
+      end
+    {:get_ptx, kernel_name, pid} ->
+      send(pid, {:ptx, ptx_map[kernel_name]})
+      module_server(types_map, ast_map, ptx_map)
+    {:set_ptx, kernel_name, ptx} ->
+      module_server(types_map, ast_map, Map.put(ptx_map, kernel_name, ptx))
+    {:kill} -> :ok
+  end
 end
-
-
 
 #############################################
 ##### For every function and kernel definition, it registers an ast and and the functions called inside the definition

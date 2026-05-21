@@ -879,52 +879,46 @@ end
 ##### and leave a call to spawn
 
 def spawn(k,t,b,l) do
- # prev = System.monotonic_time()
   kernel_name = JIT.get_kernel_name(k)
-  {kast,fun_graph} = case load_ast(k) do
-            {a,g} -> {a,g}
-            nil -> raise "Unknown kernel #{inspect kernel_name}"
+  {kast, fun_graph} =
+    case load_ast(k) do
+      {a,g} -> {a,g}
+      nil -> raise "Unknown kernel #{inspect kernel_name}"
+    end
+  {kast, l} = JIT.closure_elimination(kast, l)
+  subs = JIT.get_function_parameters(kast, l)
+  delta = JIT.gen_types_delta(kast, l)
+  map_key = {kernel_name, subs, delta}
+
+  send(:module_server, {:get_ptx, map_key, self()})
+  {ptx, types_args} = receive do
+    {:ptx, nil} ->
+      inf_types = JIT.infer_types(kast, delta)
+      types_args = JIT.get_types_para(kast,inf_types)
+
+      kernel = JIT.compile_kernel(kast, inf_types, subs)
+      funs = JIT.get_function_parameters_and_their_types(kast, l, inf_types)
+      other_funs = fun_graph
+                    |> Enum.map(fn x -> {x, inf_types[x]} end)
+                    |> Enum.filter(fn {_,i} -> i != nil end)
+      comp = Enum.map(funs ++ other_funs, &JIT.compile_function/1)
+      comp = Enum.reduce(comp, [], fn x, y -> y ++ x end)
+      includes = JIT.get_includes()
+      prog = [includes | comp] ++ [kernel]
+
+      prog = Enum.reduce(prog, "", fn x, y -> y <> x end)
+
+      ptx = jit_compile_nif(Kernel.to_charlist(kernel_name), Kernel.to_charlist(prog))
+      send(:module_server, {:set_ptx, map_key, {ptx, types_args}})
+      {ptx, types_args}
+    {:ptx, {ptx, types_args}} ->
+      {ptx, types_args}
+    h -> raise "Unknown message from module_server #{inspect h}"
   end
-  #IO.inspect kast
-  #IO.inspect fun_graph
-  #raise "hell"
-  {kast,l} = JIT.closure_elimination(kast,l)
 
-  delta = JIT.gen_types_delta(kast,l)
-  #IO.inspect "Delta: #{inspect delta}"
-  inf_types = JIT.infer_types(kast,delta)
-  #IO.inspect "inf type kernel: #{inspect inf_types}"
-  #raise "hell"
-  subs = JIT.get_function_parameters(kast,l)
-  #IO.inspect subs
-  kernel =JIT.compile_kernel(kast,inf_types,subs)
-  #IO.inspect "kernel: #{inspect kernel}"
-  funs=JIT.get_function_parameters_and_their_types(kast,l,inf_types)
-  other_funs = fun_graph
-                |> Enum.map(fn x -> {x, inf_types[x]} end)
-                |> Enum.filter(fn {_,i} -> i != nil end)
-  #IO.inspect funs
-  #IO.inspect other_funs
-  comp = Enum.map(funs++other_funs,&JIT.compile_function/1)
-  comp = Enum.reduce(comp,[], fn x, y -> y++x end)
-  #IO.puts comp
-  includes = JIT.get_includes()
-  prog = [includes| comp] ++[kernel]
-
-  prog = Enum.reduce(prog,"", fn x, y -> y<>x end)
-
- 
   args = process_args_no_fun(l)
-  types_args = JIT.get_types_para(kast,inf_types)
-  
-  #IO.puts prog
- 
-  jit_compile_and_launch_nif(Kernel.to_charlist(kernel_name),Kernel.to_charlist(prog),t,b, length(args), types_args,args)
-
-
+  jit_launch_nif(ptx, Kernel.to_charlist(kernel_name), t, b, length(args), types_args, args)
 end
-
-
 
 #############################################3
 ##########
@@ -983,7 +977,12 @@ def spawn_nif(_k,_t,_b,_l) do
   raise "NIF spawn_nif/1 not implemented"
 end
 
-def jit_compile_and_launch_nif(_n,_k,_t,_b,_size,_types,_l) do
-  raise "NIF jit_compile_and_launch_nif/7 not implemented"
+def jit_compile_nif(_n,_k) do
+  raise "NIF jit_compile_nif/2 not implemented"
 end
+
+def jit_launch_nif(_p,_k,_t,_b,_size,_types,_l) do
+  raise "NIF jit_launch_nif/7 not implemented"
+end
+
 end

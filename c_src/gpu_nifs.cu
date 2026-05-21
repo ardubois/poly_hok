@@ -58,6 +58,7 @@ void init_cuda(ErlNifEnv *env)
 ErlNifResourceType *KERNEL_TYPE;
 ErlNifResourceType *ARRAY_TYPE;
 ErlNifResourceType *PINNED_ARRAY;
+ErlNifResourceType *PTX_TYPE;
 
 void dev_array_destructor(ErlNifEnv *env, void *res)
 {
@@ -81,6 +82,8 @@ load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)
       enif_open_resource_type(env, NULL, "gpu_ref", dev_array_destructor, ERL_NIF_RT_CREATE, NULL);
   PINNED_ARRAY =
       enif_open_resource_type(env, NULL, "pinned_array", dev_pinned_array_destructor, ERL_NIF_RT_CREATE, NULL);
+  PTX_TYPE =
+      enif_open_resource_type(env, NULL, "ptx", NULL, ERL_NIF_RT_CREATE, NULL);
   return 0;
 }
 
@@ -124,7 +127,7 @@ void fail_nvrtc(ErlNifEnv *env, nvrtcResult result, const char *obs)
   enif_raise_exception(env, enif_make_string(env, message, ERL_NIF_LATIN1));
 }
 
-char *compile_to_ptx(ErlNifEnv *env, char *program_source)
+ERL_NIF_TERM compile_to_ptx(ErlNifEnv *env, char* program_source)
 {
   nvrtcResult rv;
 
@@ -159,70 +162,45 @@ char *compile_to_ptx(ErlNifEnv *env, char *program_source)
     nvrtcResult erro_g = rv;
     size_t log_size;
     rv = nvrtcGetProgramLogSize(prog, &log_size);
-    if (rv != NVRTC_SUCCESS)
-      fail_nvrtc(env, rv, "nvrtcGetProgramLogSize");
-    // auto log = std::make_unique<char[]>(log_size);
+    if(rv != NVRTC_SUCCESS)
+      fail_nvrtc(env,rv,"nvrtcGetProgramLogSize");
+    //auto log = std::make_unique<char[]>(log_size);
     char log[log_size];
     rv = nvrtcGetProgramLog(prog, log);
-    if (rv != NVRTC_SUCCESS)
-      fail_nvrtc(env, rv, "nvrtcGetProgramLog");
+    if(rv != NVRTC_SUCCESS)
+      fail_nvrtc(env,rv,"nvrtcGetProgramLog");
     assert(log[log_size - 1] == '\0');
 
     printf("Compilation error; log: %s\n", log);
 
-    fail_nvrtc(env, erro_g, "nvrtcCompileProgram");
-    // return enif_make_int(env, 0);
+    fail_nvrtc(env,erro_g,"nvrtcCompileProgram");
+    //return enif_make_int(env, 0);
   }
   // get ptx code
   size_t ptx_size;
   rv = nvrtcGetPTXSize(prog, &ptx_size);
-  if (rv != NVRTC_SUCCESS)
-    fail_nvrtc(env, rv, "nvrtcGetPTXSize");
-  char *ptx_source = new char[ptx_size];
+  if(rv != NVRTC_SUCCESS)
+    fail_nvrtc(env,rv,"nvrtcGetPTXSize");
+  char *ptx_source = (char *)enif_alloc_resource(PTX_TYPE, ptx_size * sizeof(char));
+  assert(ptx_source != NULL);
   nvrtcGetPTX(prog, ptx_source);
 
-  if (rv != NVRTC_SUCCESS)
-    fail_nvrtc(env, rv, "nvrtcGetPTX");
+  if(rv != NVRTC_SUCCESS) fail_nvrtc(env, rv, "nvrtcGetPTX");
   assert(ptx_source[ptx_size - 1] == '\0');
 
   nvrtcDestroyProgram(&prog);
 
-  return ptx_source;
+  ERL_NIF_TERM ptxResource = enif_make_resource(env, ptx_source);
+
+  enif_release_resource(ptx_source);
+
+  return ptxResource;
 }
 
-static ERL_NIF_TERM jit_compile_and_launch_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-
-  ERL_NIF_TERM list_types;
-  ERL_NIF_TERM head_types;
-  ERL_NIF_TERM tail_types;
-
-  ERL_NIF_TERM list_args;
-  ERL_NIF_TERM head_args;
-  ERL_NIF_TERM tail_args;
-
-  const ERL_NIF_TERM *tuple_blocks;
-  const ERL_NIF_TERM *tuple_threads;
-  int arity;
-
-  CUmodule module;
-  CUfunction function;
-  CUresult err;
-
-  /// START COLLECTING TIME
-
-  // float time;
-  // cudaEvent_t start, stop;
-  //  cudaEventCreate(&start) ;
-  // cudaEventCreate(&stop) ;
-  // cudaEventRecord(start, 0) ;
-
-  /////////// get name kernel
-
+static ERL_NIF_TERM jit_compile_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
   ERL_NIF_TERM e_name = argv[0];
   unsigned int size_name;
-  if (!enif_get_list_length(env, e_name, &size_name))
-  {
+  if (!enif_get_list_length(env,e_name,&size_name)) {
     return enif_make_badarg(env);
   }
 
@@ -230,217 +208,193 @@ static ERL_NIF_TERM jit_compile_and_launch_nif(ErlNifEnv *env, int argc, const E
 
   enif_get_string(env, e_name, kernel_name, size_name + 1, ERL_NIF_LATIN1);
 
-  ///////////// get code
-
+  // get code
   ERL_NIF_TERM e_code = argv[1];
   unsigned int size_code;
-  if (!enif_get_list_length(env, e_code, &size_code))
-  {
+  if (!enif_get_list_length(env,e_code,&size_code)) {
     return enif_make_badarg(env);
   }
 
-  char code[size_code + 1];
+  char code[size_code+1];
+  enif_get_string(env,e_code,code,size_code+1,ERL_NIF_LATIN1);
 
-  enif_get_string(env, e_code, code, size_code + 1, ERL_NIF_LATIN1);
+  return compile_to_ptx(env, code);
+}
 
-  if (!enif_get_tuple(env, argv[2], &arity, &tuple_blocks))
-  {
-    printf("spawn: blocks argument is not a tuple");
-  }
+static ERL_NIF_TERM jit_launch_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+	char *ptx = NULL;
 
-  if (!enif_get_tuple(env, argv[3], &arity, &tuple_threads))
-  {
-    printf("spawn:threads argument is not a tuple");
-  }
-  int b1, b2, b3, t1, t2, t3;
+	if (!enif_get_resource(env, argv[0], PTX_TYPE, (void **)&ptx)) {
+		return enif_make_badarg(env);
+	}
 
-  enif_get_int(env, tuple_blocks[0], &b1);
-  enif_get_int(env, tuple_blocks[1], &b2);
-  enif_get_int(env, tuple_blocks[2], &b3);
-  enif_get_int(env, tuple_threads[0], &t1);
-  enif_get_int(env, tuple_threads[1], &t2);
-  enif_get_int(env, tuple_threads[2], &t3);
+	ERL_NIF_TERM e_name = argv[1];
+	unsigned int size_name;
+	if (!enif_get_list_length(env,e_name,&size_name)) {
+		return enif_make_badarg(env);
+	}
 
-  int size_args;
+	/* @todo same issue */
+	char kernel_name[size_name+1];
+	enif_get_string(env, e_name, kernel_name, size_name + 1, ERL_NIF_LATIN1);
 
-  if (!enif_get_int(env, argv[4], &size_args))
-  {
-    return enif_make_badarg(env);
-  }
+	const ERL_NIF_TERM *tuple_blocks;
+	const ERL_NIF_TERM *tuple_threads;
+	int arity;
 
-  CUdeviceptr arrays[size_args];
-  float floats[size_args];
-  int ints[size_args];
-  double doubles[size_args];
-  int arrays_ptr = 0;
-  int floats_ptr = 0;
-  int doubles_ptr = 0;
-  int ints_ptr = 0;
-  // printf("%s\n",code);
-  // printf("Args: %d %d %d %d %d %d\n",b1,b2,b3,t1,t2,t3);
+	CUmodule   module;
+	CUfunction function;
+	CUresult   err;
 
-  char *ptx = compile_to_ptx(env, code);
+	if (!enif_get_tuple(env, argv[2], &arity, &tuple_blocks)) {
+		printf ("spawn: blocks argument is not a tuple");
+	}
 
-  init_cuda(env);
-  // int device =0;
-  // CUcontext  context2 = NULL;
-  // err = cuCtxCreate(&context2, 0, device);
-  err = cuModuleLoadDataEx(&module, ptx, 0, 0, 0);
-  // printf("after module load\n");
-  if (err != CUDA_SUCCESS)
-    fail_cuda(env, err, "cuModuleLoadData jit compile");
+	if (!enif_get_tuple(env, argv[3], &arity, &tuple_threads)) {
+		printf ("spawn:threads argument is not a tuple");
+	}
+	int64_t b1,b2,b3,t1,t2,t3;
 
-  // And here is how you use your compiled PTX
+	enif_get_int64(env,tuple_blocks[0],&b1);
+	enif_get_int64(env,tuple_blocks[1],&b2);
+	enif_get_int64(env,tuple_blocks[2],&b3);
+	enif_get_int64(env,tuple_threads[0],&t1);
+	enif_get_int64(env,tuple_threads[1],&t2);
+	enif_get_int64(env,tuple_threads[2],&t3);
 
-  err = cuModuleGetFunction(&function, module, kernel_name);
-  // printf("after get funcction\n");
-  if (err != CUDA_SUCCESS)
-    fail_cuda(env, err, "cuModuleGetFunction jit compile");
 
-  void *args[size_args];
+	int64_t size_args;
+	if (!enif_get_int64(env, argv[4], &size_args)) {
+		return enif_make_badarg(env);
+	}
 
-  list_types = argv[5];
-  list_args = argv[6];
+	CUdeviceptr arrays[size_args];
+	float floats[size_args];
+	int ints[size_args];
+	double doubles[size_args];
+	int64_t arrays_ptr=0;
+	int64_t floats_ptr=0;
+	int64_t doubles_ptr=0;
+	int64_t ints_ptr=0;
 
-  for (int i = 0; i < size_args; i++)
-  {
-    char type_name[1024];
-    unsigned int size_type;
-    if (!enif_get_list_cell(env, list_types, &head_types, &tail_types))
-    {
-      printf("erro get list cell\n");
-      return enif_make_badarg(env);
-    }
-    if (!enif_get_list_length(env, head_types, &size_type))
-    {
-      printf("erro get list length\n");
-      return enif_make_badarg(env);
-    }
+	init_cuda(env);
+	err = cuModuleLoadDataEx(&module, ptx, 0, 0, 0);
+	if (err != CUDA_SUCCESS) fail_cuda(env,err,"cuModuleLoadData jit compile");
 
-    enif_get_string(env, head_types, type_name, size_type + 1, ERL_NIF_LATIN1);
+	// use compiled ptx
+	err = cuModuleGetFunction(&function, module, kernel_name);
+	if (err != CUDA_SUCCESS) fail_cuda(env,err,"cuModuleGetFunction jit compile");
 
-    if (!enif_get_list_cell(env, list_args, &head_args, &tail_args))
-    {
-      printf("erro get list cell\n");
-      return enif_make_badarg(env);
-    }
+	void *args[size_args];
 
-    if (strcmp(type_name, "int") == 0)
-    {
-      int iarg;
-      if (!enif_get_int(env, head_args, &iarg))
-      {
-        printf("error getting int arg\n");
-        return enif_make_badarg(env);
-      }
-      ints[ints_ptr] = iarg;
-      args[i] = (void *)&ints[ints_ptr];
-      ints_ptr++;
-    }
-    else if (strcmp(type_name, "float") == 0)
-    {
+	ERL_NIF_TERM list_types;
+	ERL_NIF_TERM head_types;
+	ERL_NIF_TERM tail_types;
 
-      double darg;
-      if (!enif_get_double(env, head_args, &darg))
-      {
-        printf("error getting float arg\n");
-        return enif_make_badarg(env);
-      }
+	ERL_NIF_TERM list_args;
+	ERL_NIF_TERM head_args;
+	ERL_NIF_TERM tail_args;
 
-      floats[floats_ptr] = (float)darg;
-      args[i] = (void *)&floats[floats_ptr];
-      floats_ptr++;
-    }
-    else if (strcmp(type_name, "double") == 0)
-    {
+	list_types = argv[5];
+	list_args = argv[6];
 
-      double darg;
-      if (!enif_get_double(env, head_args, &darg))
-      {
-        printf("error getting double arg\n");
-        return enif_make_badarg(env);
-      }
+	for(int i=0; i<size_args; i++) {
+		char type_name[1024];
+		unsigned int size_type;
+		if (!enif_get_list_cell(env,list_types,&head_types,&tail_types)) {
+			printf("erro get list cell\n");
+			return enif_make_badarg(env);
+		}
+		if (!enif_get_list_length(env,head_types,&size_type)) {
+			printf("erro get list length\n");
+			return enif_make_badarg(env);
+		}
 
-      doubles[doubles_ptr] = darg;
-      args[i] = (void *)&doubles[doubles_ptr];
-      doubles_ptr++;
-    }
-    else if (strcmp(type_name, "tint") == 0)
-    {
+		enif_get_string(env,head_types,type_name,size_type+1,ERL_NIF_LATIN1);
 
-      CUdeviceptr *array_res;
-      enif_get_resource(env, head_args, ARRAY_TYPE, (void **)&array_res);
-      arrays[arrays_ptr] = *array_res;
-      args[i] = (void *)&arrays[arrays_ptr];
-      arrays_ptr++;
-    }
-    else if (strcmp(type_name, "tfloat") == 0)
-    {
-      CUdeviceptr *array_res;
-      enif_get_resource(env, head_args, ARRAY_TYPE, (void **)&array_res);
-      arrays[arrays_ptr] = *array_res;
-      args[i] = (void *)&arrays[arrays_ptr];
-      arrays_ptr++;
-    }
-    else if (strcmp(type_name, "tdouble") == 0)
-    {
+		if (!enif_get_list_cell(env,list_args,&head_args,&tail_args)) {
+			printf("erro get list cell\n");
+			return enif_make_badarg(env);
+		}
 
-      CUdeviceptr *array_res;
-      enif_get_resource(env, head_args, ARRAY_TYPE, (void **)&array_res);
-      arrays[arrays_ptr] = *array_res;
-      // printf("pointer %p\n",arrays[arrays_ptr]);
-      args[i] = (void *)&arrays[arrays_ptr];
-      arrays_ptr++;
-    }
-    else
-    {
-      printf("Type %s not suported\n", type_name);
-      return enif_make_badarg(env);
-    }
+		if (strcmp(type_name, "int") == 0) {
+			int iarg;
+			if(!enif_get_int(env, head_args, &iarg)) {
+				printf("error getting int arg\n");
+				return enif_make_badarg(env);
+			}
+			ints[ints_ptr] = iarg;
+			args[i] = (void*)  &ints[ints_ptr];
+			ints_ptr++;
+		} else if (strcmp(type_name, "float") == 0) {
+			double darg;
+			if(!enif_get_double(env, head_args, &darg)) {
+				printf("error getting float arg\n");
+				return enif_make_badarg(env);
+			}
+			floats[floats_ptr] = (float) darg;
+			args[i] = (void*)  &floats[floats_ptr];
+			floats_ptr++;
+		} else if (strcmp(type_name, "double") == 0) {
+			double darg;
+			if(!enif_get_double(env, head_args, &darg)) {
+				printf("error getting double arg\n");
+				return enif_make_badarg(env);
+			}
+			doubles[doubles_ptr] =  darg;
+			args[i] = (void*)  &doubles[doubles_ptr];
+			doubles_ptr++;
+		} else if (strcmp(type_name, "tint") == 0) {
+			CUdeviceptr *array_res;
+			enif_get_resource(env, head_args, ARRAY_TYPE, (void **) &array_res);
+			arrays[arrays_ptr] = *array_res;
+			args[i] = (void*)  &arrays[arrays_ptr];
+			arrays_ptr++;
+		} else if (strcmp(type_name, "tfloat") == 0) {
+			CUdeviceptr *array_res;
+			enif_get_resource(env, head_args, ARRAY_TYPE, (void **) &array_res);
+			arrays[arrays_ptr] = *array_res;
+			args[i] = (void*)  &arrays[arrays_ptr];
+			arrays_ptr++;
 
-    list_types = tail_types;
-    list_args = tail_args;
-  }
+		} else if (strcmp(type_name, "tdouble") == 0) {
+			CUdeviceptr *array_res;
+			enif_get_resource(env, head_args, ARRAY_TYPE, (void **) &array_res);
+			arrays[arrays_ptr] = *array_res;
+			args[i] = (void*)  &arrays[arrays_ptr];
+			arrays_ptr++;
+		} else {
+			printf("Type %s not suported\n", type_name);
+			return enif_make_badarg(env);
+		}
 
-  // printf("after arguments and types\n");
+		list_types = tail_types;
+		list_args = tail_args;
+	}
 
-  // LAUNCH KERNEL
+	// launch kernel
+	init_cuda(env);
 
-  /// END COLLECTING TIME
+	err = cuLaunchKernel(
+		function,
+		b1, b2, b3, // Nx1x1 blocks
+		t1, t2, t3, // 1x1x1 threads
+		0, 0, args, 0
+	) ;
+	if (err != CUDA_SUCCESS) fail_cuda(env,err,"cuLaunchKernel jit compile");
 
-  // cudaEventRecord(stop, 0) ;
-  //  cudaEventSynchronize(stop) ;
-  //  cudaEventElapsedTime(&time, start, stop) ;
+	cuCtxSynchronize();
 
-  // printf("cuda%s\t%3.1f\n", kernel_name,time);
+	if(err != CUDA_SUCCESS)  {
+		char message[200];//printf("its ok\n");
+		const char *error;
+		cuGetErrorString(err, &error);
+		strcpy(message,"Error at kernel launch: ");
+		strcat(message, error);
+		enif_raise_exception(env,enif_make_string(env, message, ERL_NIF_LATIN1));
+	}
 
-  init_cuda(env);
-
-  err = cuLaunchKernel(function, b1, b2, b3, // Nx1x1 blocks
-                       t1, t2, t3,           // 1x1x1 threads
-                       0, 0, args, 0);
-  // printf("after kernel launch\n");
-  if (err != CUDA_SUCCESS)
-    fail_cuda(env, err, "cuLaunchKernel jit compile");
-
-  cuCtxSynchronize();
-
-  // int ptr_matrix[1000];
-  // CUdeviceptr *dev_array = (CUdeviceptr*) args[1];
-  // err=  cuMemcpyDtoH(ptr_matrix, dev_array, 3*sizeof(int)) ;
-  // printf("pointer %p\n",*dev_array);
-  //  printf("blah %p\n",args[0]);
-  if (err != CUDA_SUCCESS)
-  {
-    char message[200]; // printf("its ok\n");
-    const char *error;
-    cuGetErrorString(err, &error);
-    strcpy(message, "Error at kernel launch: ");
-    strcat(message, error);
-    enif_raise_exception(env, enif_make_string(env, message, ERL_NIF_LATIN1));
-  }
-
-  return enif_make_int(env, 0);
+	return enif_make_int(env, 0);
 }
 
 ///////////////////////
@@ -1660,7 +1614,8 @@ static ERL_NIF_TERM spawn_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 }
 
 static ErlNifFunc nif_funcs[] = {
-    {"jit_compile_and_launch_nif", 7, jit_compile_and_launch_nif},
+    {"jit_compile_nif", 2, jit_compile_nif},
+    {"jit_launch_nif", 7, jit_launch_nif},
     {"new_gpu_array_nif", 3, new_gpu_array_nif},
     {"get_gpu_array_nif", 4, get_gpu_array_nif},
     {"create_gpu_array_nx_nif", 4, create_gpu_array_nx_nif},
