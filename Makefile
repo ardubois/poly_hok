@@ -7,4 +7,4 @@ bmp: c_src/bmp_nifs.cu
 	nvcc --shared -g --compiler-options '-fPIC' -o priv/bmp_nifs.so c_src/bmp_nifs.cu
 
 clean:
-	rm priv/gpu_nifs.so
+	rm -f priv/gpu_nifs.so priv/bmp_nifs.so
