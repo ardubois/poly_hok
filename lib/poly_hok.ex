@@ -753,6 +753,27 @@ def type_check_args(kernel,narg, [:matrex | t1], [a|t2]) do
     end
 
 end
+def type_check_args(kernel,narg, [:tfloat | t1], [a|t2]) do
+    case a do
+      {:nx, {:f, 32}, _shape, _name , _ref} -> type_check_args(kernel,narg+1,t1,t2)
+      _             -> raise "#{kernel}: argument #{narg} should have type tfloat."
+    end
+
+end
+def type_check_args(kernel,narg, [:tdouble | t1], [a|t2]) do
+    case a do
+      {:nx, {:f, 64}, _shape, _name , _ref} -> type_check_args(kernel,narg+1,t1,t2)
+      _             -> raise "#{kernel}: argument #{narg} should have type tdouble."
+    end
+
+end
+def type_check_args(kernel,narg, [:tint | t1], [a|t2]) do
+    case a do
+      {:nx, {:s, 32}, _shape, _name , _ref} -> type_check_args(kernel,narg+1,t1,t2)
+      _             -> raise "#{kernel}: argument #{narg} should have type tint."
+    end
+
+end
 def type_check_args(kernel,narg, [:float | t1], [v|t2]) do
     if is_float(v) do
       type_check_args(kernel,narg+1,t1,t2)
